@@ -10,7 +10,7 @@ connectDB();
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/tickets', require('./routes/ticketRoutes'));
+app.use('/tickets', require('./routes/ticketRoutes'));
 
 const PORT = process.env.PORT || 4003; // Puerto 4003 para Tickets
 app.listen(PORT, () => {
