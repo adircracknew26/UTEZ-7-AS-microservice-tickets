@@ -1,23 +1,30 @@
 const Ticket = require('../models/Ticket');
 
-// 1. COMPRAR BOLETO (Solo genera registros en BD)
+// 1. COMPRAR BOLETO (Genera N tickets en BD)
 exports.purchaseTicket = async (req, res) => {
     try {
         const { 
-            eventoId, usuarioId, zona, precio, cantidad, 
+            eventoId, usuarioId, usuarioEmail, zona, precio, cantidad, 
             nombreAsistente, nombreEvento, imagenEvento, lugarEvento, fechaEvento 
         } = req.body;
 
         const ticketsCreados = [];
+        // Valor por defecto 1 por seguridad
+        const numBoletos = cantidad || 1;
 
-        for (let i = 0; i < cantidad; i++) {
+        console.log(`Generando ${numBoletos} tickets para usuario ${usuarioId}`);
+
+        for (let i = 0; i < numBoletos; i++) {
             const nuevoTicket = new Ticket({
                 eventoId,
                 usuarioId,
+                usuarioEmail, // Útil para tener el correo a la mano en el ticket
                 zona,
-                precio,
+                precio, // Precio unitario (puede ser la mitad si es 2x1)
+                asiento: 'General', // O lógica de asientos numerados
                 nombreAsistente: nombreAsistente || 'Portador',
-                // Guardamos los datos visuales (Snapshot) para que se vean en "Mis Tickets"
+                
+                // Snapshot visual para historial
                 nombreEvento,
                 imagenEvento,
                 lugarEvento,
@@ -28,16 +35,15 @@ exports.purchaseTicket = async (req, res) => {
             ticketsCreados.push(nuevoTicket);
         }
 
-        // Respondemos al Frontend con los tickets creados.
-        // El Frontend tomará estos datos y llamará al servicio de notificaciones por su cuenta.
+        // Respondemos con el array de tickets creados
         res.status(201).json({
             msg: 'Compra exitosa',
             cantidad: ticketsCreados.length,
-            tickets: ticketsCreados 
+            tickets: ticketsCreados // Array de objetos Ticket
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Error en purchaseTicket:", error);
         res.status(500).json({ msg: 'Error en la compra', error: error.message });
     }
 };
@@ -53,32 +59,32 @@ exports.getMyTickets = async (req, res) => {
     }
 };
 
-// 3. VALIDAR BOLETO (Para la App del Portero - Solo lectura)
+// 3. VALIDAR BOLETO (Scanner)
 exports.validateTicket = async (req, res) => {
     try {
         const { token } = req.params;
         const ticket = await Ticket.findOne({ ticketToken: token });
 
         if (!ticket) {
-            return res.status(404).json({ valido: false, msg: 'Boleto NO encontrado' });
+            return res.status(404).json({ valid: false, msg: 'Boleto NO encontrado' });
         }
 
         if (ticket.estado === 'USADO') {
             return res.status(400).json({ 
-                valido: false, 
+                valid: false, 
                 msg: 'Boleto YA FUE USADO', 
                 fechaUso: ticket.fechaUso 
             });
         }
 
         if (ticket.estado === 'CANCELADO') {
-            return res.status(400).json({ valido: false, msg: 'Boleto CANCELADO' });
+            return res.status(400).json({ valid: false, msg: 'Boleto CANCELADO' });
         }
 
         res.status(200).json({ 
-            valido: true, 
+            valid: true, 
             msg: 'ACCESO PERMITIDO', 
-            data: ticket 
+            ticket 
         });
 
     } catch (error) {
@@ -86,7 +92,7 @@ exports.validateTicket = async (req, res) => {
     }
 };
 
-// 4. CHECK-IN (Para la App del Portero - Cambia estado a USADO)
+// 4. CHECK-IN (Cambio de estado)
 exports.checkInTicket = async (req, res) => {
     try {
         const { token } = req.body;
