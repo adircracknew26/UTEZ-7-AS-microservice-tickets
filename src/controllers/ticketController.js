@@ -1,38 +1,11 @@
 const Ticket = require('../models/Ticket');
-const axios = require('axios');
 
-// URL del servicio de notificaciones (Ajusta si usas local o render)
-const NOTIFICATION_SERVICE_URL = 'https://utez-7-as-microservice-notifications.onrender.com/api/notifications/ticket';
-
-// Helper para enviar correo
-const sendTicketNotification = async (ticket, emailUsuario) => {
-    try {
-        const ticketData = {
-            evento: ticket.nombreEvento || 'Evento SVCBDE',
-            fecha: ticket.fechaEvento || new Date().toLocaleDateString(),
-            lugar: ticket.lugarEvento || 'Sede del Evento',
-            asiento: 'General', 
-            zona: ticket.zona,
-            boletoId: ticket.ticketToken
-        };
-
-        await axios.post(NOTIFICATION_SERVICE_URL, {
-            email: emailUsuario,
-            ticketData
-        });
-        console.log(`Correo enviado a ${emailUsuario}`);
-    } catch (error) {
-        console.error('Error enviando correo:', error.message);
-    }
-};
-
-// 1. COMPRAR BOLETO
+// 1. COMPRAR BOLETO (Solo genera registros en BD)
 exports.purchaseTicket = async (req, res) => {
     try {
         const { 
             eventoId, usuarioId, zona, precio, cantidad, 
-            nombreAsistente, emailUsuario, 
-            nombreEvento, imagenEvento, lugarEvento, fechaEvento // <--- NUEVOS DATOS
+            nombreAsistente, nombreEvento, imagenEvento, lugarEvento, fechaEvento 
         } = req.body;
 
         const ticketsCreados = [];
@@ -44,7 +17,7 @@ exports.purchaseTicket = async (req, res) => {
                 zona,
                 precio,
                 nombreAsistente: nombreAsistente || 'Portador',
-                // Guardamos los datos visuales para que la tarjeta se vea bonita
+                // Guardamos los datos visuales (Snapshot) para que se vean en "Mis Tickets"
                 nombreEvento,
                 imagenEvento,
                 lugarEvento,
@@ -53,14 +26,10 @@ exports.purchaseTicket = async (req, res) => {
             
             await nuevoTicket.save();
             ticketsCreados.push(nuevoTicket);
-
-            // Enviamos correo si hay email
-            if (emailUsuario) {
-                // No usamos await para no bloquear la respuesta
-                sendTicketNotification(nuevoTicket, emailUsuario);
-            }
         }
 
+        // Respondemos al Frontend con los tickets creados.
+        // El Frontend tomará estos datos y llamará al servicio de notificaciones por su cuenta.
         res.status(201).json({
             msg: 'Compra exitosa',
             cantidad: ticketsCreados.length,
@@ -73,8 +42,7 @@ exports.purchaseTicket = async (req, res) => {
     }
 };
 
-// ... (El resto de funciones: getMyTickets, validateTicket, checkInTicket, getEventStats QUEDAN IGUAL) ...
-// Copia aquí el resto de tu código original a partir de exports.getMyTickets
+// 2. OBTENER MIS BOLETOS (Historial)
 exports.getMyTickets = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -85,42 +53,67 @@ exports.getMyTickets = async (req, res) => {
     }
 };
 
+// 3. VALIDAR BOLETO (Para la App del Portero - Solo lectura)
 exports.validateTicket = async (req, res) => {
     try {
         const { token } = req.params;
         const ticket = await Ticket.findOne({ ticketToken: token });
 
-        if (!ticket) return res.status(404).json({ valido: false, msg: 'Boleto NO encontrado' });
-        if (ticket.estado === 'USADO') return res.status(400).json({ valido: false, msg: 'Boleto YA FUE USADO', fechaUso: ticket.fechaUso });
-        if (ticket.estado === 'CANCELADO') return res.status(400).json({ valido: false, msg: 'Boleto CANCELADO' });
+        if (!ticket) {
+            return res.status(404).json({ valido: false, msg: 'Boleto NO encontrado' });
+        }
 
-        res.status(200).json({ valido: true, msg: 'ACCESO PERMITIDO', data: ticket });
+        if (ticket.estado === 'USADO') {
+            return res.status(400).json({ 
+                valido: false, 
+                msg: 'Boleto YA FUE USADO', 
+                fechaUso: ticket.fechaUso 
+            });
+        }
+
+        if (ticket.estado === 'CANCELADO') {
+            return res.status(400).json({ valido: false, msg: 'Boleto CANCELADO' });
+        }
+
+        res.status(200).json({ 
+            valido: true, 
+            msg: 'ACCESO PERMITIDO', 
+            data: ticket 
+        });
+
     } catch (error) {
         res.status(500).json({ msg: 'Error de validación' });
     }
 };
 
+// 4. CHECK-IN (Para la App del Portero - Cambia estado a USADO)
 exports.checkInTicket = async (req, res) => {
     try {
         const { token } = req.body;
         const ticket = await Ticket.findOne({ ticketToken: token });
 
-        if (!ticket || ticket.estado !== 'VALIDO') return res.status(400).json({ msg: 'No se puede hacer Check-in. Boleto inválido o usado.' });
+        if (!ticket || ticket.estado !== 'VALIDO') {
+            return res.status(400).json({ msg: 'No se puede hacer Check-in. Boleto inválido o usado.' });
+        }
 
         ticket.estado = 'USADO';
         ticket.fechaUso = new Date();
         await ticket.save();
 
         res.status(200).json({ msg: 'Check-in exitoso. Bienvenido.' });
+
     } catch (error) {
         res.status(500).json({ msg: 'Error en Check-in' });
     }
 };
 
+// 5. ESTADÍSTICAS
 exports.getEventStats = async (req, res) => {
     try {
         const { eventId } = req.params;
-        if (!eventId) return res.status(400).json({ msg: "Error: No se recibió el ID" });
+        if (!eventId) {
+            return res.status(400).json({ msg: "Error: No se recibió el ID del evento" });
+        }
 
         const totalVendidos = await Ticket.countDocuments({ eventoId: eventId });
         const totalIngresados = await Ticket.countDocuments({ eventoId: eventId, estado: 'USADO' });
@@ -131,7 +124,12 @@ exports.getEventStats = async (req, res) => {
             totalIngresados,
             porcentajeAsistencia: totalVendidos > 0 ? ((totalIngresados / totalVendidos) * 100).toFixed(2) + '%' : '0%'
         });
+
     } catch (error) {
-        res.status(500).json({ msg: 'Error calculando estadísticas' });
+        console.error("ERROR EN STATS:", error);
+        res.status(500).json({ 
+            msg: 'Error calculando estadísticas', 
+            errorDetalle: error.message 
+        });
     }
 };
